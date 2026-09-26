@@ -1,0 +1,6 @@
+[project]
+name = "commitment-issues"
+version = "0.1.0"
+description = "Provider-neutral autonomous coding-agent harness"
+requires-python = ">=3.11"
+dependencies = []

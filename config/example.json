@@ -1,0 +1,11 @@
+{
+  "provider": "openai-compatible",
+  "model": "REPLACE_WITH_EXPLICIT_MODEL",
+  "base_url": "https://REPLACE_WITH_PROVIDER_HOST/v1",
+  "native_tools": false,
+  "max_steps": 50,
+  "context_budget": 12000,
+  "budget": 100000,
+  "wall_seconds": 600,
+  "command_timeout": 30
+}
