@@ -8,7 +8,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 DIRECTORIES = ('harness', 'tests', 'benchmarks', 'config', 'docs', 'tools', '.github')
-ROOT_FILES = ('Makefile', 'README.md', '.gitignore', '.env.example', 'pyproject.toml', 'requirements.txt')
+ROOT_FILES = ('Makefile', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '.gitignore', '.env.example', 'pyproject.toml', 'requirements.txt')
 KEY_PATTERNS = (r'AIza[0-9A-Za-z_-]{30,}', r'\bsk-(?:proj-)?[0-9A-Za-z_-]{20,}', r'\bgh[pousr]_[0-9A-Za-z]{30,}')
 
 

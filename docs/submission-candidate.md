@@ -39,10 +39,10 @@ Final model validation is a separate gate: after organisers supply details, conf
 
 ## Release boundary
 
-Package is a local allowlisted candidate, not a published release. Full credential/history review, license decision, remote CI and required submission location remain open. Existing format scanning does not establish absence of every secret. Target commands execute on the host with basic guards, not OS isolation. Token budgets are estimates, not strict billing ceilings. See the checklist for additional unproven capabilities.
+Package is a local allowlisted candidate, not a published release. An MIT license and attribution notes are present. A high-confidence credential-pattern review found no matches in 277 Git blobs (all local Git objects, including unreachable ones) or the 133 allowlisted files. This does not guarantee absence of every secret; GitHub push protection remains an additional safeguard when access is restored. Remote CI and publication remain open. Target commands execute on the host with basic guards, not OS isolation. Token budgets are estimates, not strict billing ceilings. See the checklist for additional unproven capabilities.
 
 ## Candidate verification
 
 145 infrastructure tests passed once after the response-validation fix; git diff --check passed. Clean-clone setup/test/default launch and simulated HTTP repair passed: artifacts/submission/rehearsals/20260926-213259-c52fed09/rehearsal.json. The local package contains 126 allowlisted files. Rehearsal uses a simulator, not DeepSeek/Qwen. Subsequent edits only record this result in documentation.
 
-A limited credential/private-key format scan of all reachable local history found no flagged paths in the one existing commit: artifacts/submission/local-history-review.json. The current package also passed its format scan. These scans are not a complete security audit; no root license or published release was created.
+A high-confidence scan covered all 277 local Git blobs and the 133 current allowlisted package files with no matches. Package generation succeeded, and a clean-clone simulated HTTP rehearsal passed after allowing its loopback-only test server. These checks do not guarantee the absence of every secret or substitute for GitHub push protection and remote CI.

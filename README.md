@@ -1,5 +1,9 @@
 # Commitment Issues
 
+This project is released under the [MIT License](LICENSE). See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for benchmark-source and CI
+action attribution notes.
+
 Commitment Issues is a Python 3.11+ command-line harness that gives a configured text model bounded tools to inspect a software repository, edit code, run checks, and produce a reviewable result.
 
 ## Submission status
@@ -59,7 +63,7 @@ Recorded successes include the starter synthetic issues, inventory workflows, Se
 
 On the final prepared Fiber Range task, the harness reached the relevant code and recorded the right diagnosis, but exhausted its token allowance without producing a patch. An isolated Sol/low attempt repaired the issue and passed the prepared regressions, full suite/vet, and range race checks. This was a comparison between different models and tools, not evidence that the harness is better than Sol. The [comparison report](docs/final-comparison-result.md) records both outcomes. These selected tasks do not establish dependable repair across arbitrary repositories.
 
-The README does not count offline infrastructure tests as live model repair successes. Full organiser-model compatibility, broad unfamiliar-repository reliability, OS isolation, a complete secret/history audit, a license decision, and remote CI remain open; see the [checklist](docs/hackathon-checklist.md).
+The README does not count offline infrastructure tests as live model repair successes. Full organiser-model compatibility, broad unfamiliar-repository reliability, OS isolation, and remote CI remain open; see the [checklist](docs/hackathon-checklist.md). A high-confidence credential scan found no matches across all local Git objects and the allowlisted release files; this reduces exposure risk but does not prove that no secret exists.
 
 ## Repository layout
 

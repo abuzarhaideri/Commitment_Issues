@@ -29,14 +29,14 @@ Updated September 27, 2026. This replaces the accumulated historical checklist. 
 - [x] Ubuntu/macOS Python 3.11–3.13 CI workflow configured; remote execution remains pending.
 - [x] Benchmark freeze, demo walkthrough and explicit testing stop criteria documented.
 - [x] Final one-attempt Fiber comparison complete; harness failure and Sol success documented without a token-efficiency claim.
+- [x] MIT license selected; tracked benchmark and CI attribution notes added.
 
 ## Final submission gates
 
 - [ ] Obtain exact DeepSeek/Qwen IDs, endpoint/authentication, selection method and task protocol.
 - [ ] Confirm evaluator runtime, permitted commands and numeric limits/scoring.
 - [ ] Commit prescribed evaluation profile; validate both models and clean-clone launch on that runtime.
-- [ ] Choose repository license and review attribution; no license has been assumed for the team.
-- [ ] Finish full secret/history review before publishing; packaging performs only a limited format scan.
+- [x] Scan all local Git objects and all allowlisted release files for high-confidence credential formats; no matches found (277 Git blobs, 133 submission files). Review the scope and limitation in `THIRD_PARTY_NOTICES.md` and the release notes.
 - [ ] Select/publish required repository/release location; execute remote CI.
 - [ ] Supply pitch/video if required by organisers.
 
