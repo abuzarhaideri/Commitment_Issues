@@ -12,6 +12,18 @@ REPORT = dict(status='RESOLVED', verification='PASS', model='fixture', steps=1,
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_reserve_and_retry_options_reach_runtime(self):
+        _, _, call = self.call(['--evaluation', '--provider', 'openai-compatible',
+            '--model', 'organiser-model', '--base-url', 'https://example.test/v1',
+            '--repo', '.', '--issue', 'Fix', '--token-reserve', '500', '--max-rate-retries', '1'])
+        self.assertEqual(call.kwargs['token_reserve'], 500)
+        self.assertEqual(call.args[2].max_retries, 1)
+
+    def test_invalid_reserve_rejected_before_launch(self):
+        for reserve in ['-1', '100001']:
+            with self.subTest(reserve=reserve), self.assertRaises(SystemExit), patch('sys.stderr', new_callable=io.StringIO):
+                self.call(['--evaluation', '--launch-check', '--budget', '100000', '--token-reserve', reserve])
+
     def call(self, args, env=None, task=''):
         with patch.dict('os.environ', env or {'AI_API_KEY': 'TEST_PLACEHOLDER'}, clear=True), \
              patch('sys.stdin', io.StringIO(task)), patch('sys.stdout', new_callable=io.StringIO) as output, \

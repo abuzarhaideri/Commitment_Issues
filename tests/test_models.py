@@ -26,7 +26,11 @@ class ModelTests(unittest.TestCase):
         self.assertEqual((response.input_tokens, response.output_tokens, response.usage_estimated), (10, 20, False))
         payload = json.loads(http.call_args.args[0].data)
         self.assertEqual(payload["max_tokens"], 2048)
-        self.assertIn("strict JSON", payload["messages"][0]["content"])
+        self.assertIn("one strict JSON action object", payload["messages"][0]["content"])
+        self.assertNotIn('"actions" array', payload["messages"][0]["content"])
+        self.assertIn("Keep goals brief", payload["messages"][0]["content"])
+        self.assertNotIn("response_format", payload)
+        self.assertNotIn("action_response_schema", payload)
 
     @patch("urllib.request.urlopen")
     def test_native_tools(self, http):
@@ -95,6 +99,47 @@ class ModelTests(unittest.TestCase):
                 OpenAICompatibleAdapter("model", "https://example.test", "key", max_output_tokens=value)
             self.assertNotIn("SECRET", str(caught.exception))
 
+
+    @patch("urllib.request.urlopen")
+    def test_invalid_actions_preserve_provider_usage(self, http):
+        http.return_value = self.response({"content": "not valid action JSON"},
+                                          {"prompt_tokens": 123, "completion_tokens": 45})
+        with self.assertRaises(ProtocolError) as caught:
+            self.adapter().generate([{"role": "user", "content": "work"}])
+        error = caught.exception
+        self.assertEqual((error.input_tokens, error.output_tokens), (123, 45))
+        self.assertFalse(error.usage_estimated)
+
+    @patch("urllib.request.urlopen")
+    def test_invalid_actions_without_usage_estimate_observed_response(self, http):
+        http.return_value = self.response({"content": "bad"})
+        with self.assertRaises(ProtocolError) as caught:
+            self.adapter().generate([])
+        self.assertTrue(caught.exception.usage_estimated)
+        self.assertLess(caught.exception.output_tokens, 2048)
+
+    @patch("urllib.request.urlopen")
+    def test_incomplete_valid_action_is_rejected_with_usage(self, http):
+        for reason in ["length", "content_filter", "unexpected"]:
+            with self.subTest(reason=reason):
+                http.return_value = io.BytesIO(json.dumps({
+                    "choices": [{"finish_reason": reason, "message": {
+                        "content": '{"action":"edit_file","arguments":{}}'}}],
+                    "usage": {"prompt_tokens": 123, "completion_tokens": 45}
+                }).encode())
+                with self.assertRaises(ProtocolError) as caught:
+                    self.adapter().generate([])
+                self.assertEqual((caught.exception.input_tokens, caught.exception.output_tokens), (123, 45))
+                self.assertFalse(caught.exception.usage_estimated)
+                self.assertEqual(caught.exception.finish_reason, reason if reason in ('length', 'content_filter') else 'UNKNOWN')
+
+    @patch("urllib.request.urlopen")
+    def test_refusal_rejects_even_valid_native_action(self, http):
+        http.return_value = self.response({"refusal": "SECRET provider text", "tool_calls": [
+            {"function": {"name": "edit_file", "arguments": '{}'}}]})
+        with self.assertRaises(ProtocolError) as caught:
+            self.adapter(True).generate([])
+        self.assertNotIn("SECRET", str(caught.exception))
 
 if __name__ == "__main__":
     unittest.main()

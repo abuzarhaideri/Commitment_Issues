@@ -65,3 +65,24 @@ The PRD gives correctness priority over efficiency. Neither it nor the supplied 
 7. **Fair optimization trials:** after finishing basic tasks, rerun fresh identical baselines with the same model/settings/test coverage, comparing current versus one optimization at a time. Record all attempts, median/range over repeats as quota permits, and reject any saving that reduces correctness or recovery ability.
 
 Do not claim a specific percentage saving in advance. Do not remove regression verification or shorten output enough to hide failures. Quota availability varies; developer token budgeting is not a billing-tier guarantee. Continue using the user-confirmed Free Tier project with billing disabled.
+
+## September 26 follow-up: pagination and Fiber
+
+| Run | Outcome | Input / output | Total | Calls | Runtime |
+| --- | --- | --- | --- | --- | --- |
+| Synthetic pagination | RESOLVED / PASS, 31/31 | 13,705 / 1,569 | 15,274 | 4 | 39.091 s |
+| Fiber first attempt | BUDGET_EXHAUSTED / NOT_RUN, no edit | 59,384 / 1,343 | 60,727 | 8 | 141.252 s |
+
+Pagination context reduction was 0%; Fiber was 5.75%, insufficient to keep the repair within budget. Fiber's input share was 97.8%. No provider retries occurred in either run. The failed Fiber attempt must remain in efficiency/reliability reporting; passing small fixtures does not establish readiness for arbitrary repositories.
+
+Prepared improvements: focused Fiber diagnosis before broad final checks, repeated-empty-search guidance and bounded failure anchors. The infrastructure suite passes 102 tests. Actual token savings and repair success remain unmeasured until another live run. Next priorities are source-aware search, durable findings memory, behavior-preservation checks and budget reservation before requests. Report benchmark repair success separately from API availability and expected-baseline recovery counters.
+
+Synthetic checkout follow-up: 26.805 seconds, 3 model calls / 10 tool calls, 8,913 input + 2,363 output = 11,276 provider tokens; context reduction 17.97%, pacing 13.762 seconds, no quota/service retries. Baseline failure separated from recovery. All four basic lab issues now pass; differing tasks/revisions are not a paired efficiency test.
+
+Intermediate inventory: 22,219 provider tokens (18,772 input / 3,447 output), 7 model calls / 15 tool calls, 75.298 seconds; 0.83% context reduction. All 8 + 11 acceptance scenarios passed. No failure recovery demonstrated; different task complexity prevents a controlled efficiency comparison.
+
+Sequelize compatibility closure: 27,426 provider tokens, five model calls, 110.860 seconds; original + all compatibility checks pass. Previous attempt used 58,965 tokens/ten calls but a different path. Observed 53.5% token reduction is not controlled causal evidence.
+
+Controlled conflict recovery: 21,973 provider tokens, six model calls, 131.979 seconds; 31 checks pass. Two 503 retries added 36 seconds backoff, so wall time includes provider availability effects. It is a labelled injected tool conflict, not a natural incorrect patch. The added list(items) copy is an avoidable memory cost.
+
+Inventory cleanup: 33,730 provider tokens, eight model calls, 88.776 seconds, all 8 + 11 + 7 checks pass. Recovery feedback covers protocol/edit/partial-cleanup failures; final task verified. Repeat mode is now implemented; live comparable samples remain pending.

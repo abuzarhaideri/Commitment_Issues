@@ -35,6 +35,7 @@ class ToolsTests(unittest.TestCase):
         self.assertFalse(self.call('edit_file', path='app.py', old='', new='bad')['ok'])
         self.assertTrue(self.call('edit_file', path='new.py', old='', new='created')['ok'])
         self.assertFalse(self.call('edit_file', path='tests/test_a.py', old='', new='bad')['ok'])
+        self.assertFalse(self.call('edit_file', path='ctx_test.go', old='', new='bad')['ok'])
         self.assertEqual(self.tools.files_modified, {'app.py', 'new.py'})
 
     def test_cache_invalidates_on_content_change(self):
@@ -148,6 +149,77 @@ class ToolsTests(unittest.TestCase):
         self.assertIn('.github/workflows/test.yml', profile['hints'])
         self.assertIn('README.md', profile['repo_map'])
 
+    def test_empty_search_guides_alternate_literal_query(self):
+        for available in (None, 'rg'):
+            with self.subTest(available=available), patch('harness.tools.shutil.which', return_value=available):
+                if available:
+                    with patch.object(self.tools, '_process', side_effect=lambda *args: {'ok': False, 'output': '', 'returncode': 1}):
+                        first = self.call('search_code', query='missing_' + str(available))
+                        second = self.call('search_code', query='missing_' + str(available))
+                else:
+                    first = self.call('search_code', query='missing')
+                    second = self.call('search_code', query='missing')
+                self.assertTrue(first['ok'])
+                self.assertIn('No literal matches', first['output'])
+                self.assertIn('same search already', second['output'])
+                self.assertIn('shorter symbol', second['output'])
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_source_search_not_hidden_by_test_volume(self):
+        import shutil
+        (self.repo / 'a_test.go').write_text('Range( test call\n' * 1000)
+        (self.repo / 'req.go').write_text('func (c *DefaultReq) Range(size int) {}\n')
+        for use_rg in (False, True):
+            if use_rg and not shutil.which('rg'):
+                continue
+            with self.subTest(use_rg=use_rg):
+                if use_rg:
+                    result = self.call('search_code', query='Range(')
+                else:
+                    with patch('harness.tools.shutil.which', return_value=None):
+                        result = self.call('search_code', query='Range(')
+                self.assertIn('req.go:1:', result['output'])
+                self.assertNotIn('a_test.go', result['output'])
+        self.assertIn('a_test.go', self.call('search_code', query='test call')['output'])
+        self.assertIn('a_test.go', self.call('search_code', query='Range(', scope='all')['output'])
+        self.assertFalse(self.call('search_code', query='Range(', scope='invalid')['ok'])
+
+    def test_guessed_receiver_falls_back_to_symbol_with_location(self):
+        import shutil
+        (self.repo / 'req.go').write_text('func (r *DefaultReq) Range(size int64) {}\n')
+        for use_rg in (False, True):
+            if use_rg and not shutil.which('rg'):
+                continue
+            with self.subTest(use_rg=use_rg):
+                if use_rg:
+                    result = self.call('search_code', query='func (c *Ctx) Range')
+                else:
+                    with patch('harness.tools.shutil.which', return_value=None):
+                        result = self.call('search_code', query='func (c *Ctx) Range')
+                self.assertIn('symbol fallback', result['output'])
+                self.assertIn('req.go:1:', result['output'])
+
+    def test_large_default_read_maps_definitions_explicit_range_is_exact(self):
+        (self.repo / 'req.go').write_text('package p\n' + '\n' * 500 +
+                                       'func (r *Req) Range(size int) {}\n')
+        result = self.call('read_file', path='req.go')
+        self.assertIn('DEFINITION MAP', result['output'])
+        self.assertIn('502: func', result['output'])
+        explicit = self.call('read_file', path='req.go', start=502, end=502)
+        self.assertEqual(explicit['output'], '502: func (r *Req) Range(size int) {}')
+
+    def test_noop_edit_rejected_without_modified_file(self):
+        (self.repo / 'app.py').write_text('return 1')
+        result = self.call('edit_file', path='app.py', old='return 1', new='return 1')
+        self.assertFalse(result['ok'])
+        self.assertIn('No-op', result['output'])
+        self.assertEqual(self.tools.files_modified, set())
+        self.assertEqual((self.repo / 'app.py').read_text(), 'return 1')
+
+    def test_failed_exact_edit_gives_location_without_fuzzy_mutation(self):
+        (self.repo / 'app.py').write_text('def f():\n    return 1\n')
+        result = self.call('edit_file', path='app.py', old='def f():\n    return 2', new='def f():\n    return 3')
+        self.assertFalse(result['ok'])
+        self.assertIn('found 0', result['output'])
+        self.assertIn('near line 1', result['output'])
+        self.assertIn('No file changed', result['output'])
+        self.assertEqual((self.repo / 'app.py').read_text(), 'def f():\n    return 1\n')

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import math
+import time
+from email.utils import parsedate_to_datetime
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -32,7 +34,7 @@ class ServiceUnavailableError(ModelHTTPError):
     """Transient provider errors exhausted transport retries, not coding recovery."""
     def __init__(self, status_code):
         super().__init__(status_code)
-        self.args = (f'Gemini service unavailable (HTTP {status_code}) after bounded retries; retry later. No provider switch was made.',)
+        self.args = (f'Model service unavailable (HTTP {status_code}) after bounded transport attempts; retry later. No provider switch was made.',)
 
 
 @dataclass
@@ -96,8 +98,19 @@ def _action(value: Any) -> Action:
     return Action(name, arguments, goal)
 
 
+def action_protocol_instruction(tools):
+    return (
+        'Return only one strict JSON action object with '
+        '"action" (string), "arguments" (object), and "goal" (string). '
+        'The finish action requires arguments "summary" and "semantic_review", both strings. '
+        'Keep goals brief and actions compact. Emit only the next useful actions; '
+        'do not include analysis or repeat file contents except required edit text. '
+        'Available tools: ' + json.dumps(tools or [], ensure_ascii=False)
+    )
+
+
 class OpenAICompatibleAdapter(ModelAdapter):
-    def __init__(self, model: str, base_url: str, api_key: str, native_tools: bool = False, timeout: float = 60, max_output_tokens: int = 2048):
+    def __init__(self, model: str, base_url: str, api_key: str, native_tools: bool = False, timeout: float = 60, max_output_tokens: int = 2048, max_retries: int = 2):
         if not isinstance(model, str) or not model.strip():
             raise ValueError("An explicit model is required")
         if not isinstance(base_url, str) or not base_url.strip():
@@ -126,6 +139,12 @@ class OpenAICompatibleAdapter(ModelAdapter):
             raise ValueError("API key must be a string")
         if any(ord(char) <= 32 or ord(char) == 127 for char in api_key):
             raise ValueError("API key contains invalid whitespace or control characters")
+        if type(max_retries) is not int or not 0 <= max_retries <= 5:
+            raise ValueError("max_retries must be an integer between 0 and 5")
+        self.max_retries = max_retries
+        self.http_requests = 0
+        self.transport_retries = 0
+        self.event_callback = None
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -133,45 +152,106 @@ class OpenAICompatibleAdapter(ModelAdapter):
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
 
+    @property
+    def deadline(self):
+        # Preserve subclasses' existing getattr(deadline, now + timeout) behavior.
+        return getattr(self, "_deadline", None) or time.monotonic() + self.timeout
+
+    @deadline.setter
+    def deadline(self, value):
+        self._deadline = value
+
     def supports_native_tools(self) -> bool:
         return self.native_tools
 
     def prepare_payload(self, payload):
         return payload
 
+    def prepare_action_payload(self, payload, tools):
+        return self.prepare_payload(payload)
+
+    def _post_endpoint(self, payload, endpoint):
+        request = urllib.request.Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"}, method="POST")
+        deadline = min((getattr(self, "deadline", None) or float("inf")), time.monotonic() + self.timeout)
+        for attempt in range(self.max_retries + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ModelError("Model request deadline exhausted")
+            try:
+                self.http_requests += 1
+                with urllib.request.urlopen(request, timeout=remaining) as response:
+                    raw_body = response.read(2 * 1024 * 1024 + 1)
+                    if len(raw_body) > 2 * 1024 * 1024:
+                        raise ModelError("Model response exceeded size limit")
+                    return raw_body.decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                status = exc.code
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                exc.close()
+                # Bare 429 may be terminal quota exhaustion; require a retry hint.
+                transient = status in (408, 500, 502, 503, 504) or (status == 429 and retry_after is not None)
+                if not transient or attempt == self.max_retries:
+                    error_type = ServiceUnavailableError if transient or status == 429 else ModelHTTPError
+                    raise error_type(status) from None
+                delay = min(8, 2 ** attempt)
+                if retry_after is not None:
+                    try:
+                        hinted = float(retry_after)
+                    except (ValueError, TypeError):
+                        try:
+                            hinted = parsedate_to_datetime(retry_after).timestamp() - time.time()
+                        except (ValueError, TypeError, OverflowError):
+                            hinted = 0
+                    if math.isfinite(hinted):
+                        delay = max(delay, hinted)
+                if delay >= deadline - time.monotonic():
+                    raise ServiceUnavailableError(status) from None
+                self.transport_retries += 1
+                if self.event_callback:
+                    self.event_callback("transport_retry", status_code=status, attempt=attempt + 1, delay_seconds=delay)
+                time.sleep(delay)
+            except (urllib.error.URLError, OSError, TimeoutError, UnicodeError, ValueError):
+                # Connection failures may occur after processing; avoid replay.
+                raise ModelError("Model request failed") from None
+
     def _post(self, payload):
         endpoint = self.base_url if self.base_url.endswith("/chat/completions") else self.base_url + "/chat/completions"
-        request = urllib.request.Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw_body = response.read(2 * 1024 * 1024 + 1)
-                if len(raw_body) > 2 * 1024 * 1024:
-                    raise ModelError("Model response exceeded size limit")
-                return raw_body.decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            exc.close()
-            raise ModelHTTPError(exc.code) from None
-        except (urllib.error.URLError, OSError, TimeoutError, UnicodeError, ValueError):
-            raise ModelError("Model request failed") from None
-    def generate(self, messages: list[dict], tools: list[dict] | None = None) -> ModelResponse:
+        return self._post_endpoint(payload, endpoint)
+
+    def estimate_request_tokens(self, messages, tools=None):
+        # Match _post_endpoint's serialization, including escaped non-ASCII text.
+        return self.count_or_estimate_tokens(json.dumps(self._request_payload(messages, tools)))
+
+    def _request_payload(self, messages, tools=None):
         request_messages = list(messages)
         payload = {"model": self.model, "messages": request_messages, "max_tokens": self.max_output_tokens}
         if self.native_tools:
             if tools:
                 payload["tools"] = [tool if tool.get("type") == "function" else {"type": "function", "function": tool} for tool in tools]
         else:
-            instruction = (
-                'Return only a strict JSON object with an "actions" array. Each action has '
-                '"action" (string), "arguments" (object), and "goal" (string). '
-                'The finish action requires arguments "summary" and "semantic_review", both strings. '
-                'Available tools: ' + json.dumps(tools or [], ensure_ascii=False)
-            )
+            instruction = action_protocol_instruction(tools)
             request_messages.insert(0, {"role": "system", "content": instruction})
-        payload = self.prepare_payload(payload)
+        return self.prepare_action_payload(payload, tools)
+
+    def generate(self, messages: list[dict], tools: list[dict] | None = None) -> ModelResponse:
+        payload = self._request_payload(messages, tools)
         body = self._post(payload)
         result = _decode_json(body)
+        usage = result.get("usage") if isinstance(result, dict) else None
+        valid_usage = isinstance(usage, dict) and all(type(usage.get(key)) is int and usage[key] >= 0 for key in ("prompt_tokens", "completion_tokens"))
+        message = {}
         try:
-            message = result["choices"][0]["message"]
+            choice = result["choices"][0]
+            message = choice["message"]
+            # A syntactically valid action can still be an incomplete response.
+            # Never execute it when the provider reports truncation or refusal.
+            if choice.get("finish_reason") not in (None, "stop", "tool_calls"):
+                error = ProtocolError("Model response did not finish normally; no actions executed")
+                reason = choice.get("finish_reason")
+                error.finish_reason = reason if reason in ("length", "content_filter", "function_call") else "UNKNOWN"
+                raise error
+            if message.get("refusal"):
+                raise ProtocolError("Model refused the request; no actions executed")
             content = message.get("content") or ""
             if not isinstance(content, str):
                 raise ProtocolError("Model content must be a string")
@@ -196,10 +276,12 @@ class OpenAICompatibleAdapter(ModelAdapter):
                     actions = [_action(decoded)]
             if not actions:
                 raise ProtocolError("Response contains no actions")
-        except (KeyError, IndexError, TypeError, AttributeError):
-            raise ProtocolError("Malformed model response") from None
-        usage = result.get("usage")
-        valid_usage = isinstance(usage, dict) and all(type(usage.get(key)) is int and usage[key] >= 0 for key in ("prompt_tokens", "completion_tokens"))
+        except (ProtocolError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            error = exc if isinstance(exc, ProtocolError) else ProtocolError("Malformed model response")
+            error.input_tokens = usage["prompt_tokens"] if valid_usage else self.count_or_estimate_tokens(payload)
+            error.output_tokens = usage["completion_tokens"] if valid_usage else self.count_or_estimate_tokens(message)
+            error.usage_estimated = not valid_usage
+            raise error from None
         return ModelResponse(actions, content,
                              usage["prompt_tokens"] if valid_usage else self.count_or_estimate_tokens(payload),
                              usage["completion_tokens"] if valid_usage else self.count_or_estimate_tokens(message),

@@ -10,7 +10,7 @@
 - Bounded context, output filtering, content-hash cache.
 - Complete final diff delivery, protected file integrity, syntax checks, fresh verification.
 - Persisted inspection state, JSONL telemetry, performance JSON, console report.
-- Offline repair demo and 93 tests covering protocol, containment, recovery, tampering, cache, verification, and benchmark selection.
+- Offline repair demo and 143 tests covering protocol, containment, recovery, tampering, cache, verification, and benchmark selection.
 
 ## Live repair validation
 

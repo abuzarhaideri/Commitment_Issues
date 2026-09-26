@@ -2,6 +2,8 @@
 
 Updated September 26, 2026. The original [audit](official-guidelines-audit.md) records the earlier launch failure; this report records the subsequent changes.
 
+> Historical checkpoints below; current completed work and final gates are consolidated in the [checklist](hackathon-checklist.md) and [candidate report](submission-candidate.md).
+
 ## 1. Evaluation entry point
 
 - [x] Plain make run automatically loads config/evaluation.json.
@@ -48,3 +50,5 @@ Component evidence: artifacts/submission/observation-comparison.json and number-
 ## Next priority
 
 Finalize organiser model/runtime/input details, then rehearse that exact configuration from a clean clone. Meanwhile fix the known Sequelize compatibility gap through the harness and complete pagination/checkout before claiming broader SDE capability. Continue using the confirmed Free Tier project.
+
+September 27 follow-up: latest-source packaging/clean-clone rehearsal refreshed; current suite 120 tests and nine offline recovery controls. DeepSeek/Qwen families are known, exact access/runtime/input remain pending. See [reliability progress](reliability-progress.md) for current status; prior counts above are historical.

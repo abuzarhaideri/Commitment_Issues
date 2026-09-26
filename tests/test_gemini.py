@@ -6,13 +6,68 @@ import unittest
 from unittest.mock import patch, Mock
 from urllib.error import HTTPError
 from harness.gemini import GeminiAdapter, GEMINI_ENDPOINT, FREE_DEVELOPMENT_MODEL, list_generation_models
-from harness.models import ModelHTTPError, ServiceUnavailableError
+from harness.models import ModelHTTPError, ServiceUnavailableError, ProtocolError
 from harness.rate_limits import RateLimitError
 from harness.main import main
 from benchmarks.run_free import main as free_main
 
 
 class GeminiTests(unittest.TestCase):
+    @patch('urllib.request.urlopen')
+    def test_native_schema_binds_actions_to_supplied_arguments(self, http):
+        from harness.tools import ToolRegistry
+        tools = ToolRegistry(Path('.')).schemas()
+        finish_parameters = {'type': 'object', 'properties': {
+            'summary': {'type': 'string'}, 'semantic_review': {'type': 'string'}},
+            'required': ['summary', 'semantic_review'], 'additionalProperties': False}
+        tools.append({'name': 'finish', 'parameters': finish_parameters})
+        actions = [{'action': 'edit_file', 'arguments': {
+            'path': 'a.py', 'old': 'old', 'new': 'new'}},
+            {'action': 'finish', 'arguments': {'summary': 'Done', 'semantic_review': 'Checked'}}]
+        http.return_value = io.BytesIO(json.dumps({'candidates': [{'finishReason': 'STOP',
+            'content': {'parts': [{'text': json.dumps({'actions': actions})}]}}]}).encode())
+        adapter = self.adapter()
+        adapter.api_route = 'native'
+        result = adapter.generate([], tools)
+        self.assertEqual([a.name for a in result.actions], ['edit_file', 'finish'])
+        config = json.loads(http.call_args.args[0].data)['generationConfig']
+        schema = config['responseJsonSchema']
+        branches = schema['anyOf']
+        by_name = {b['properties']['action']['enum'][0]: b for b in branches}
+        self.assertEqual(by_name['edit_file']['properties']['arguments'], tools[5]['function']['parameters'])
+        self.assertEqual(by_name['finish']['properties']['arguments'], finish_parameters)
+        self.assertFalse(by_name['edit_file']['additionalProperties'])
+        payload = json.loads(http.call_args.args[0].data)
+        instruction = payload['systemInstruction']['parts'][0]['text']
+        self.assertIn('one strict JSON action object', instruction)
+        self.assertNotIn('Available tools:', instruction)
+        self.assertEqual(adapter.estimate_request_tokens([], tools),
+                         adapter.count_or_estimate_tokens(http.call_args.args[0].data.decode()))
+
+    @patch('urllib.request.urlopen')
+    def test_native_never_returns_partial_action_batch(self, http):
+        for text, reason in [('{"actions":[{"action":"edit_file","arguments":{}},', 'STOP'),
+                             ('{"action":"edit_file","arguments":{}}', 'MAX_TOKENS'),
+                             ('{"actions":[{"action":"read_file","arguments":{}},42]}', 'STOP')]:
+            with self.subTest(reason=reason, text=text):
+                http.return_value = io.BytesIO(json.dumps({'candidates': [{'finishReason': reason,
+                    'content': {'parts': [{'text': text}]}}], 'usageMetadata': {
+                    'promptTokenCount': 100, 'candidatesTokenCount': 20, 'thoughtsTokenCount': 30}}).encode())
+                adapter = self.adapter()
+                adapter.api_route = 'native'
+                with self.assertRaises(ProtocolError) as caught:
+                    adapter.generate([])
+                self.assertEqual((caught.exception.input_tokens, caught.exception.output_tokens), (100, 50))
+                self.assertFalse(caught.exception.usage_estimated)
+
+    def test_malformed_native_envelope_keeps_usage(self):
+        adapter = self.adapter()
+        adapter.api_route = 'native'
+        with self.assertRaises(ProtocolError) as caught:
+            adapter._normalize_response(json.dumps({'candidates': [], 'usageMetadata': {
+                'promptTokenCount': 100, 'candidatesTokenCount': 20, 'thoughtsTokenCount': 30}}))
+        self.assertEqual((caught.exception.input_tokens, caught.exception.output_tokens), (100, 50))
+
     @patch('benchmarks.run_sequelize.run', return_value=0)
     @patch('benchmarks.run_free.run_benchmark')
     @patch('os.environ', {'GEMINI_API_KEY': 'PLACEHOLDER'})
@@ -136,6 +191,8 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(sum(m['role'] == 'system' for m in payload['messages']), 1)
         self.assertEqual(payload['max_tokens'], 8192)
         self.assertNotIn('tools', payload)
+        self.assertNotIn('response_format', payload)
+        self.assertNotIn('action_response_schema', payload)
         self.assertEqual(adapter.http_requests, 1)
 
     @patch('urllib.request.urlopen')
@@ -315,3 +372,15 @@ class GeminiTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             free_main([])
         benchmark.assert_not_called()
+
+    def test_incomplete_native_response_preserves_usage_without_executing(self):
+        from harness.models import ProtocolError
+        adapter = GeminiAdapter('gemini-3.1-flash-lite', GEMINI_ENDPOINT, 'PLACEHOLDER', api_route='native')
+        body = json.dumps({'candidates': [{'finishReason': 'MAX_TOKENS', 'content': {'parts': [{'text': '{partial'}]}}],
+                           'usageMetadata': {'promptTokenCount': 200, 'candidatesTokenCount': 30, 'thoughtsTokenCount': 40}})
+        with self.assertRaises(ProtocolError) as caught:
+            adapter._normalize_response(body)
+        self.assertEqual((caught.exception.input_tokens, caught.exception.output_tokens), (200, 70))
+        self.assertFalse(caught.exception.usage_estimated)
+        self.assertIn('MAX_TOKENS', str(caught.exception))
+        self.assertEqual(caught.exception.finish_reason, 'MAX_TOKENS')

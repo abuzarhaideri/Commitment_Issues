@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import json
+from datetime import datetime, timezone
+import statistics
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -21,10 +25,31 @@ def main(argv=None):
     parser.add_argument('--probe', action='store_true', help='One small native API generation request; no repository tools or repairs')
     parser.add_argument('--fixture', choices=sorted(FIXTURES), default='label_normalization')
     parser.add_argument('--sequelize', action='store_true', help='Run the prepared real Sequelize repository benchmark')
+    parser.add_argument('--sequelize-compat', action='store_true', help='Fresh correction of the earlier Sequelize compatibility regression')
+    parser.add_argument('--fiber', action='store_true', help='Run a fresh real Fiber Range-limit repair benchmark')
+    parser.add_argument('--fiber-focused', action='store_true', help='Fresh Fiber repair with an explicit Range bug description')
+    parser.add_argument('--inventory-cleanup', action='store_true', help='Fresh helper API and cleanup follow-up of successful inventory repair')
+    parser.add_argument('--synthetic-recovery', action='store_true', help='Checkout repair with one labelled injected edit conflict')
+    parser.add_argument('--synthetic-inventory', action='store_true', help='Three-module atomic inventory reservation task')
     parser.add_argument('--synthetic-issue', choices=list(SYNTHETIC_ISSUES), help='Run one issue in a fresh synthetic repository')
+    parser.add_argument('--repeat', type=int, choices=range(1, 6), default=1, help='Explicit fresh trials (1–5); one hidden key prompt, all attempts recorded')
     parser.add_argument('--min-request-interval', type=float, default=12,
                         help='Seconds between request starts; adjust using your AI Studio quota')
     args = parser.parse_args(argv)
+    if args.repeat > 1 and (args.probe or args.list_models or args.sequelize):
+        parser.error('--repeat requires a fresh repair benchmark, not diagnostics or the legacy Sequelize target')
+    if args.inventory_cleanup and (args.synthetic_recovery or args.sequelize_compat or args.sequelize or args.fiber or args.fiber_focused or args.synthetic_inventory or args.synthetic_issue or args.probe or args.list_models or args.fixture != 'label_normalization'):
+        parser.error('--inventory-cleanup cannot be combined with another task')
+    if args.synthetic_recovery and (args.sequelize_compat or args.sequelize or args.fiber or args.fiber_focused or args.synthetic_inventory or args.synthetic_issue or args.probe or args.list_models or args.fixture != 'label_normalization'):
+        parser.error('--synthetic-recovery cannot be combined with another task')
+    if args.sequelize_compat and (args.sequelize or args.fiber or args.fiber_focused or args.synthetic_inventory or args.synthetic_issue or args.probe or args.list_models or args.fixture != 'label_normalization'):
+        parser.error('--sequelize-compat cannot be combined with another task')
+    if args.synthetic_inventory and (args.fiber or args.fiber_focused or args.sequelize or args.synthetic_issue or args.probe or args.list_models or args.fixture != 'label_normalization'):
+        parser.error('--synthetic-inventory cannot be combined with another task')
+    if args.fiber and args.fiber_focused:
+        parser.error('Choose --fiber or --fiber-focused')
+    if (args.fiber or args.fiber_focused) and (args.sequelize or args.synthetic_issue or args.probe or args.list_models or args.fixture != 'label_normalization'):
+        parser.error('--fiber/--fiber-focused cannot be combined with another benchmark or diagnostic')
     if args.probe and args.list_models:
         parser.error('Choose --probe or --list-models')
     if args.sequelize and (args.probe or args.list_models or args.fixture != 'label_normalization'):
@@ -86,21 +111,7 @@ def main(argv=None):
             '--gemini-api-route', 'native',
             '--max-steps', '20', '--wall-seconds', '600', '--budget', '60000',
             '--min-request-interval', str(args.min_request_interval)]
-        if args.sequelize:
-            from benchmarks.run_sequelize import run
-            try:
-                return run(model_options)
-            except (ValueError, OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
-                print(f'Sequelize benchmark setup failed: {exc}', file=sys.stderr)
-                return 1
-        if args.synthetic_issue:
-            from benchmarks.run_synthetic import run
-            try:
-                return run(['--issue', args.synthetic_issue, *model_options])
-            except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
-                print(f'Synthetic benchmark setup failed: {exc}', file=sys.stderr)
-                return 1
-        return run_benchmark(['--fixture', args.fixture, *model_options])
+        return run_series(args, model_options)
     finally:
         if previous_gemini_key is None:
             os.environ.pop('GEMINI_API_KEY', None)
@@ -110,6 +121,92 @@ def main(argv=None):
             os.environ.pop('AI_API_KEY', None)
         else:
             os.environ['AI_API_KEY'] = previous_key
+
+
+def run_selected(args, model_options):
+    if args.inventory_cleanup:
+        from benchmarks.run_inventory_cleanup import run
+        return run(model_options)
+    if args.synthetic_recovery:
+        from benchmarks.run_recovery import run
+        return run(model_options)
+    if args.sequelize_compat:
+        from benchmarks.run_sequelize_compat import run
+        try:
+            return run(model_options)
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f'Sequelize compatibility setup failed: {exc}', file=sys.stderr)
+            return 1
+    if args.synthetic_inventory:
+        from benchmarks.run_inventory import run
+        return run(model_options)
+    if args.fiber or args.fiber_focused:
+        from benchmarks.run_fiber import run
+        try:
+            return run((['--focused'] if args.fiber_focused else []) + model_options)
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f'Fiber benchmark setup failed: {exc}', file=sys.stderr)
+            return 1
+    if args.sequelize:
+        from benchmarks.run_sequelize import run
+        try:
+            return run(model_options)
+        except (ValueError, OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            print(f'Sequelize benchmark setup failed: {exc}', file=sys.stderr)
+            return 1
+    if args.synthetic_issue:
+        from benchmarks.run_synthetic import run
+        try:
+            return run(['--issue', args.synthetic_issue, *model_options])
+        except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+            print(f'Synthetic benchmark setup failed: {exc}', file=sys.stderr)
+            return 1
+    return run_benchmark(['--fixture', args.fixture, *model_options])
+
+def evidence_root(args):
+    if args.inventory_cleanup: return ROOT / 'artifacts/inventory-cleanup'
+    if args.synthetic_recovery: return ROOT / 'artifacts/recovery'
+    if args.synthetic_inventory: return ROOT / 'artifacts/inventory'
+    if args.sequelize_compat: return ROOT / 'artifacts/external/sequelize/compatibility-runs'
+    if args.fiber or args.fiber_focused: return ROOT / 'artifacts/external/fiber/runs'
+    if args.synthetic_issue: return ROOT / 'artifacts/synthetic'
+    return ROOT / 'artifacts/benchmarks'
+
+
+def run_series(args, options):
+    if args.repeat == 1:
+        return run_selected(args, options)
+    folder = ROOT / 'artifacts/comparisons' / (datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:8])
+    folder.mkdir(parents=True)
+    root = evidence_root(args)
+    attempts = []
+    for index in range(args.repeat):
+        before = set(root.glob('*/evidence/*/performance.json'))
+        print(f'Fresh trial {index + 1}/{args.repeat}', flush=True)
+        setup_failed = False
+        try:
+            exit_code = run_selected(args, options)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            print('Trial setup failed before a complete result; stopping series.', flush=True)
+            exit_code, setup_failed = 1, True
+        created = set(root.glob('*/evidence/*/performance.json')) - before
+        record = json.loads(max(created, key=lambda path: path.stat().st_mtime).read_text()) if created else {'status': 'SETUP_FAILURE' if setup_failed else 'NO_EVIDENCE'}
+        attempts.append({key: record.get(key) for key in ('status', 'verification', 'model', 'input_tokens', 'output_tokens',
+                                                         'usage_estimated', 'wall_seconds', 'llm_calls', 'artifacts')})
+        attempts[-1]['exit_code'] = exit_code
+        summary = {'requested': args.repeat, 'completed': len(attempts), 'attempts': attempts,
+                   'model_options': options,
+                   'scope': 'Same task/settings, fresh targets; stochastic trials, not a controlled before/after comparison',
+                   'resolved': sum(a['status'] == 'RESOLVED' and a['verification'] == 'PASS' and a['exit_code'] == 0 for a in attempts)}
+        reported = [a['input_tokens'] + a['output_tokens'] for a in attempts
+                    if a['input_tokens'] is not None and a['output_tokens'] is not None and a['usage_estimated'] is False]
+        summary['provider_only_token_median'] = statistics.median(reported) if reported else None
+        summary['provider_only_samples'] = len(reported)
+        (folder / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+        if record.get('status') in ('SETUP_FAILURE', 'NO_EVIDENCE', 'QUOTA_EXHAUSTED', 'SERVICE_UNAVAILABLE', 'INTERRUPTED') or 'HTTP status 40' in record.get('reason', ''):
+            break
+    print(f"Repeated trials: {summary['resolved']}/{summary['completed']} resolved; evidence: {folder / 'summary.json'}", flush=True)
+    return 0 if summary['completed'] == args.repeat and summary['resolved'] == args.repeat else 1
 
 
 if __name__ == '__main__':

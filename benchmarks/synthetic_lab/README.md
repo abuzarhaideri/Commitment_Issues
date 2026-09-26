@@ -57,7 +57,7 @@ Offline preparation check, requiring no key or generation:
 - The healthy template passes all 31 tests in local verification.
 - Issue 1, `label-order`, passed its first live run: all 31 checks pass, only `catalog.py` changed, 41.174 seconds and 7,832 total tokens. No recovery or API retries occurred; the current context-reduction metric is 0%.
 - Issue 2, `boolean-config`, passed: all 31 checks, only `settings.py` changed, 65.435 seconds and 22,014 total tokens. Its recovery record is an expected baseline failure, not a failed first patch. Context reduction remains 0%.
-- `pagination` and `checkout` live runs are pending. See [live results](results.md) and the [efficiency review](../../docs/efficiency-review.md).
+- `pagination` and `checkout` have also passed all 31 checks; all four basic issues are complete. See [live results](results.md) and the [efficiency review](../../docs/efficiency-review.md).
 - Prior label/checkout fixture successes remain separate results and do not
   establish results for this lab.
 
@@ -68,3 +68,5 @@ still needs a compatibility review, as the Sequelize run demonstrated.
 After these basics, add tasks involving a misleading stack trace, a failed
 first fix, three-module refactoring, long logs, and held-out compatibility
 cases. Change one difficulty dimension at a time.
+
+Next difficulty level: [inventory reservations](../inventory_lab/README.md), a separate three-module task with distractors and independent acceptance cases.

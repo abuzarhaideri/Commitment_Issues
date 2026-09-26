@@ -1,40 +1,26 @@
 """OpenAI Responses transport, using the provider-neutral JSON action protocol."""
 import json
-import urllib.error
-import urllib.request
-from .models import OpenAICompatibleAdapter, ModelError, ProtocolError, ModelResponse, _action, _decode_json
+from .models import OpenAICompatibleAdapter, ModelError, ProtocolError, ModelResponse, action_protocol_instruction, _action, _decode_json
 
 
 class OpenAIResponsesAdapter(OpenAICompatibleAdapter):
-    def __init__(self, model, base_url, api_key, reasoning_effort='low', timeout=60, max_output_tokens=8192):
+    def __init__(self, model, base_url, api_key, reasoning_effort='low', timeout=60, max_output_tokens=8192, max_retries=2):
         super().__init__(model, base_url, api_key, native_tools=False,
-                         timeout=timeout, max_output_tokens=max_output_tokens)
+                         timeout=timeout, max_output_tokens=max_output_tokens, max_retries=max_retries)
         if reasoning_effort not in ('none', 'low', 'medium', 'high', 'xhigh', 'max'):
             raise ValueError('Unsupported reasoning effort')
         self.reasoning_effort = reasoning_effort
 
-    def generate(self, messages, tools=None):
-        instructions = ('Return only a strict JSON object {"actions": [{"action": "tool_name", '
-                        '"arguments": {}, "goal": "reason"}]}. finish requires summary and '
-                        'semantic_review strings. Available tools: ' + json.dumps(tools or []))
-        payload = {'model': self.model, 'input': [
-            {'role': 'system', 'content': instructions}, *messages],
+    def _request_payload(self, messages, tools=None):
+        return {'model': self.model, 'input': [
+            {'role': 'system', 'content': action_protocol_instruction(tools)}, *messages],
             'reasoning': {'effort': self.reasoning_effort},
             'max_output_tokens': self.max_output_tokens, 'store': False}
+
+    def generate(self, messages, tools=None):
+        payload = self._request_payload(messages, tools)
         endpoint = self.base_url if self.base_url.endswith('/responses') else self.base_url + '/responses'
-        request = urllib.request.Request(endpoint, data=json.dumps(payload).encode(),
-                    headers={'Authorization': 'Bearer ' + self.api_key, 'Content-Type': 'application/json'}, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read(2 * 1024 * 1024 + 1)
-                if len(raw) > 2 * 1024 * 1024:
-                    raise ModelError('Model response exceeded size limit')
-                result = _decode_json(raw.decode())
-        except urllib.error.HTTPError as exc:
-            exc.close()
-            raise ModelError(f'Model request failed with HTTP status {exc.code}') from None
-        except (urllib.error.URLError, OSError, TimeoutError, UnicodeError, ValueError):
-            raise ModelError('Model request failed') from None
+        result = _decode_json(self._post_endpoint(payload, endpoint))
         if not isinstance(result, dict):
             raise ProtocolError('Malformed Responses API response')
         usage = result.get('usage')
@@ -52,6 +38,8 @@ class OpenAIResponsesAdapter(OpenAICompatibleAdapter):
                 if not isinstance(item, dict):
                     raise ProtocolError('Malformed response output item')
                 if item.get('type') == 'message':
+                    if item.get('status') not in (None, 'completed'):
+                        raise ProtocolError('Response message not completed; no actions executed')
                     for part in item.get('content', []):
                         if not isinstance(part, dict):
                             raise ProtocolError('Malformed response content')

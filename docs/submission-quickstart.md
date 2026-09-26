@@ -10,7 +10,7 @@ make setup
 make run
 ```
 
-make run automatically loads config/evaluation.json. Its Gemini 3.1 Flash-Lite native JSON profile is **provisional, not organiser-approved**. Before submission the team must commit prescribed provider/model/endpoint settings; evaluators should not edit configuration. This entry point reads only AI_API_KEY, does not reuse development keys and does not ask for FREE confirmation.
+make run automatically loads config/evaluation.json. Its Gemini 3.1 Flash-Lite native JSON profile is **provisional, not organiser-approved**. The team reports that final evaluation will use DeepSeek and Qwen; exact model IDs and endpoint/protocol remain pending. Before submission the team must commit prescribed provider/model/endpoint settings; evaluators should not edit configuration. This entry point reads only AI_API_KEY, does not reuse development keys and does not ask for FREE confirmation.
 
 On a terminal it prompts for a local repository path and issue. Automated input is one JSON line:
 
@@ -44,3 +44,5 @@ Packaging creates an allowlisted ZIP/hash manifest under artifacts/submission, e
 Rehearsal creates a temporary Git repository and actual local clone, runs setup/test/launch, then completes a fixture repair through a localhost simulated HTTP model. Reports/evidence are retained per run under artifacts/submission/rehearsals. Local socket permission is required. No live/paid model is used; this does not validate another OS/runtime or the prescribed model.
 
 Sequelize benchmarking requires its separately prepared Node/Yarn environment, not for harness startup. make clean removes Python caches and preserves evidence.
+
+Resource allocation: --token-reserve N (HARNESS_TOKEN_RESERVE/config token_reserve) reserves within the existing total; zero disables it, omitted defaults to 15% capped at 12,000. Compatible/Responses --max-rate-retries (HARNESS_MAX_RATE_RETRIES/config max_rate_retries) defaults to two bounded transport retries and does not switch providers. Full behavior/limits: [reserve and transport report](reserve-adapter-progress.md).

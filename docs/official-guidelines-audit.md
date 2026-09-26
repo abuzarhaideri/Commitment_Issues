@@ -2,6 +2,8 @@
 
 Reviewed September 26, 2026 against **AI Harness Submission (1).pdf**, all 10 pages, including repeated sections on pages 4–7. This establishes the submission/startup contract. It does not specify a model, runtime, issue transport, scoring weights, numeric token/time/cost ceilings, cache requirement or memory architecture. PRD efficiency goals are team targets unless another official document establishes them.
 
+> Historical audit: the startup failure below was subsequently fixed. For current status, see [checklist](hackathon-checklist.md) and [submission candidate](submission-candidate.md). The original findings are preserved.
+
 ## Verdict
 
 The repair engine is functional, but **the submission is not ready: plain `make run` fails with only AI_API_KEY**, contrary to the prescribed launch sequence. The PDF expressly says evaluators will not repair the implementation or manually configure it. No percentage score can be derived from these guidelines.

@@ -29,6 +29,7 @@ def parser():
     p.add_argument('--max-steps', type=int)
     p.add_argument('--context-budget', type=int)
     p.add_argument('--budget', type=int, help='Total input/output token budget (checked between calls)')
+    p.add_argument('--token-reserve', type=int, help='Within-budget correction/review reserve; 0 disables, omitted uses an adaptive default')
     p.add_argument('--wall-seconds', type=float)
     p.add_argument('--command-timeout', type=float)
     p.add_argument('--test-command', action='append', help='Repeat for targeted and broader verification')
@@ -50,7 +51,7 @@ def main(argv=None):
             config = json.loads(config_path.read_text()) if config_path else {}
             if not isinstance(config, dict):
                 raise ValueError('Config must be a JSON object')
-            if any('key' in k.lower() or ('token' in k.lower() and k.lower() not in ('token_budget', 'max_output_tokens')) for k in config):
+            if any('key' in k.lower() or ('token' in k.lower() and k.lower() not in ('token_budget', 'max_output_tokens', 'token_reserve')) for k in config):
                 raise ValueError('Credentials must come from environment variables, never config')
             def choose(name, env, default=None):
                 cli = getattr(args, name)
@@ -90,6 +91,14 @@ def main(argv=None):
                 'command_timeout': float(choose('command_timeout', 'HARNESS_COMMAND_TIMEOUT', 30))}
             if any(value <= 0 for value in limits.values()):
                 raise ValueError('All resource limits must be positive')
+            reserve = choose('token_reserve', 'HARNESS_TOKEN_RESERVE')
+            if reserve is not None:
+                if isinstance(reserve, bool) or not isinstance(reserve, (int, str)):
+                    raise ValueError('token_reserve must be an integer allowance')
+                reserve = int(reserve)
+                if not 0 <= reserve <= limits['token_budget']:
+                    raise ValueError('token_reserve must be between 0 and the total token budget')
+            limits['token_reserve'] = reserve
             native = choose('native_tools', 'HARNESS_NATIVE_TOOLS', False)
             if isinstance(native, str):
                 if native.lower() not in ('true', 'false', '1', '0'):
@@ -104,7 +113,8 @@ def main(argv=None):
                 from .openai_responses import OpenAIResponsesAdapter
                 adapter = OpenAIResponsesAdapter(model, endpoint, key,
                     reasoning_effort=choose('reasoning_effort', 'HARNESS_REASONING_EFFORT', 'low'),
-                    timeout=min(60, limits['wall_seconds']), max_output_tokens=max_output)
+                    timeout=min(60, limits['wall_seconds']), max_output_tokens=max_output,
+                    max_retries=int(choose('max_rate_retries', 'HARNESS_MAX_RATE_RETRIES', 2)))
             elif provider == 'gemini-compatible':
                 if native:
                     raise ValueError('gemini-compatible currently uses JSON actions; omit --native-tools')
@@ -117,7 +127,8 @@ def main(argv=None):
                     timeout=min(60, limits['wall_seconds']), max_output_tokens=max_output)
             else:
                 adapter = OpenAICompatibleAdapter(model, endpoint, key, native_tools=native,
-                    timeout=min(60, limits['wall_seconds']), max_output_tokens=max_output)
+                    timeout=min(60, limits['wall_seconds']), max_output_tokens=max_output,
+                    max_retries=int(choose('max_rate_retries', 'HARNESS_MAX_RATE_RETRIES', 2)))
             if args.evaluation or args.launch_check:
                 print(f'HARNESS READY | provider={provider} | model={model} | API access not yet checked', flush=True)
                 if args.evaluation and config.get('profile_status') == 'provisional-development-model':

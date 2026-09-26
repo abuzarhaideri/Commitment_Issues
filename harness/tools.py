@@ -80,7 +80,7 @@ class ToolRegistry:
     SPECS = {
         'repo_overview': {}, 'list_dir': {'path': 'string'}, 'get_file_info': {'path': 'string'},
         'read_file': {'path': 'string', 'mode': 'string', 'start': 'integer', 'end': 'integer'},
-        'search_code': {'query': 'string', 'path': 'string'},
+        'search_code': {'query': 'string', 'path': 'string', 'scope': 'string'},
         'edit_file': {'path': 'string', 'old': 'string', 'new': 'string'},
         'run_command': {'command': 'string'}, 'run_tests': {'command': 'string'}, 'git_diff': {},
     }
@@ -96,6 +96,7 @@ class ToolRegistry:
         self.cache_hits = self.cache_misses = 0
         self.files_seen, self.files_modified = set(), set()
         self._cache = {}
+        self._empty_searches = set()
 
     def schemas(self) -> list:
         return [{'type': 'function', 'function': {'name': name, 'description': name.replace('_', ' '), 'parameters': {'type': 'object', 'properties': {key: {'type': kind} for key, kind in params.items()}, 'required': self.REQUIRED.get(name, []), 'additionalProperties': False}}} for name, params in self.SPECS.items()]
@@ -169,21 +170,44 @@ class ToolRegistry:
 
     def _read_file(self, path, mode='range', start=1, end=None):
         lines = self._read(self._path(path)).splitlines()
-        if mode == 'outline':
-            return '\n'.join(f'{i}: {line}' for i, line in enumerate(lines, 1) if re.match(r'\s*(class |(?:async )?def |function |export |#)', line))
+        if mode == 'outline' or (mode == 'range' and start == 1 and end is None and len(lines) > 400):
+            definitions = [f'{i}: {line[:180]}' for i, line in enumerate(lines, 1)
+                           if re.match(r'\s*(class |(?:async )?def |function |export |func |type |#)', line)]
+            if definitions:
+                return ('DEFINITION MAP: request read_file with explicit start/end to inspect exact source.\n' +
+                        '\n'.join(definitions))
+            if mode == 'outline':
+                return 'No recognized definitions; request an explicit line range.'
         if mode != 'range' or start < 1 or (end is not None and end < start):
             raise ValueError('Invalid range or mode')
         end = min(end if end is not None else start + 199, start + 199)
         return '\n'.join(f'{i}: {lines[i-1]}' for i in range(start, min(end, len(lines)) + 1))
 
-    def _search_code(self, query, path='.'):
+    def _search_code(self, query, path='.', scope='auto'):
+        if scope not in ('auto', 'all', 'source'):
+            raise ValueError('Search scope must be auto, source, or all')
         p = self._path(path)
         if not query:
             raise ValueError('Query must not be empty')
+        # Search production files first so test output cannot hide implementations.
+        test_globs = ['!**/*_test.go', '!**/test_*.py', '!**/*_test.py',
+                      '!**/*.test.*', '!**/*.spec.*', '!**/tests/**', '!**/test/**']
+        source_only = scope != 'all' and p.is_dir()
         # Python traversal validates each symlink; rg does not follow symlinks.
         if shutil.which('rg'):
-            result = self._process(['rg', '-n', '-H', '-F', '--max-filesize', '1M', *[item for directory in sorted(SKIP_DIRS) for item in ('--glob', '!' + directory + '/**')], '--', query, str(p.relative_to(self.repo))])
+            result = self._process(['rg', '-n', '-H', '-F', '--max-filesize', '1M', *[item for glob in (test_globs if source_only else []) for item in ('--glob', glob)], *[item for directory in sorted(SKIP_DIRS) for item in ('--glob', '!' + directory + '/**')], '--', query, str(p.relative_to(self.repo))])
             if result.get('returncode') == 1:
+                if scope == 'auto' and source_only:
+                    # A guessed receiver can hide a method that exists on another type.
+                    symbol = re.search(r'\b(?:func|def|function)\s+(?:\([^)]*\)\s*)?(\w+)', query)
+                    if symbol:
+                        relaxed = ' ' + symbol.group(1) + '('
+                        fallback = self._search_code(relaxed, path, scope='source')
+                        if not fallback['output'].startswith('No literal matches') and fallback.get('ok'):
+                            fallback['output'] = ('No exact signature match; symbol fallback for ' +
+                                                  repr(relaxed) + ':\n' + fallback['output'])
+                            return fallback
+                    return self._search_code(query, path, scope='all')
                 result['ok'] = True
             lines = []
             for line in result['output'].splitlines():
@@ -197,14 +221,19 @@ class ToolRegistry:
                         continue
                 lines.append(line)
             result['output'] = '\n'.join(lines)
+            if result.get('ok') and not lines:
+                result['output'] = self._empty_search_hint(query, path)
             return result
         matches = []
         files = [p] if p.is_file() else repository_files(p)
+        files = sorted(files, key=lambda candidate: (self._is_test_path(candidate), str(candidate)))
         for candidate in files:
             try:
                 if not candidate.is_file():
                     continue
                 candidate = self._path(str(candidate))
+                if source_only and self._is_test_path(candidate):
+                    continue
                 for i, line in enumerate(self._read(candidate).splitlines(), 1):
                     if query in line:
                         matches.append(f'{candidate.relative_to(self.repo)}:{i}:{line}')
@@ -212,12 +241,39 @@ class ToolRegistry:
                             return '\n'.join(matches)
             except (OSError, ValueError):
                 continue
-        return '\n'.join(matches)
+        if not matches and scope == 'auto' and source_only:
+            symbol = re.search(r'\b(?:func|def|function)\s+(?:\([^)]*\)\s*)?(\w+)', query)
+            if symbol:
+                relaxed = ' ' + symbol.group(1) + '('
+                fallback = self._search_code(relaxed, path, scope='source')
+                if isinstance(fallback, str):
+                    fallback = {'ok': True, 'output': fallback}
+                if not fallback['output'].startswith('No literal matches') and fallback.get('ok'):
+                    fallback['output'] = ('No exact signature match; symbol fallback for ' +
+                                          repr(relaxed) + ':\n' + fallback['output'])
+                    return fallback
+            return self._search_code(query, path, scope='all')
+        return '\n'.join(matches) if matches else self._empty_search_hint(query, path)
+
+    @staticmethod
+    def _is_test_path(path):
+        return (any(part in ('test', 'tests') for part in path.parts) or
+                path.name.startswith('test_') or path.name.endswith(('_test.go', '_test.py')) or
+                '.test.' in path.name or '.spec.' in path.name)
+
+    def _empty_search_hint(self, query, path):
+        repeated = (query, path) in self._empty_searches
+        self._empty_searches.add((query, path))
+        return ('No literal matches. ' + ('This same search already returned no matches. ' if repeated else '') +
+                'Search a shorter symbol or error fragment; do not guess an exact signature or receiver type. '
+                'Narrow the path after locating the implementation. An empty search is not a repository failure.')
 
     def _edit_file(self, path, old, new):
+        if old == new:
+            raise ValueError('No-op edit rejected: old and new are identical; no file changed')
         p = self._path(path)
         parts = p.relative_to(self.repo).parts
-        if any(x.lower() in ('tests', 'test', 'eval', 'evaluation', 'evals', '.github', '.agents', '.codex') for x in parts) or p.name.startswith('test_') or p.name.endswith(('_test.py', '.test.js', '.spec.ts')):
+        if any(x.lower() in ('tests', 'test', 'eval', 'evaluation', 'evals', '.github', '.agents', '.codex') for x in parts) or p.name.startswith('test_') or p.name.endswith(('_test.py', '_test.go', '.test.js', '.spec.ts')):
             raise ValueError('Protected test or evaluation infrastructure')
         if not p.exists():
             if old:
@@ -228,8 +284,14 @@ class ToolRegistry:
             if not old:
                 raise ValueError('Empty old text only permitted for new files')
             content = self._read(p)
-            if content.count(old) != 1:
-                raise ValueError('Old text must occur exactly once')
+            matches = content.count(old)
+            if matches != 1:
+                first = next((line.strip() for line in old.splitlines() if line.strip()), '')
+                locations = [i for i, line in enumerate(content.splitlines(), 1) if first and line.strip() == first]
+                hint = f' near line {locations[0]}' if locations else ''
+                raise ValueError(f'Old text must occur exactly once; found {matches}. No file changed. '
+                                 f'Reread {path}{hint} with explicit start/end, then use a smaller exact unique block. '
+                                 'Do not run verification as though this edit succeeded.')
             p.write_text(content.replace(old, new, 1))
         self.files_modified.add(str(p.relative_to(self.repo)))
         return 'File updated'

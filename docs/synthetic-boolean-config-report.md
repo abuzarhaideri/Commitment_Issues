@@ -34,4 +34,4 @@ The original 31-test suite was run once by the agent before editing, then twice 
 - Failed baseline output was recorded as `TOOL_FAILURE`/recovery. That overstates evidence of coding recovery and can add duplicate failure/log context.
 - The primary efficiency targets are compact baseline/pass summaries, focused failure extraction, and less repeated history. Preserve independent full final verification.
 
-See [cross-run efficiency review](efficiency-review.md) for all runs and PRD checkpoints. Next live task: `make benchmark-free ARGS='--synthetic-issue pagination'`.
+See [cross-run efficiency review](efficiency-review.md) for all runs and PRD checkpoints. Pagination has since passed; see the [pagination report](synthetic-pagination-report.md). Synthetic checkout remains pending.

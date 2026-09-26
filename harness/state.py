@@ -9,7 +9,9 @@ class TaskState:
     status: str = 'RUNNING'
     reason: str = ''
     plan: list = field(default_factory=list)
+    findings: list = field(default_factory=list)
     failures: list = field(default_factory=list)
+    baseline_failures: list = field(default_factory=list)
     tests: list = field(default_factory=list)
     verification: str = 'NOT_RUN'
     steps: int = 0

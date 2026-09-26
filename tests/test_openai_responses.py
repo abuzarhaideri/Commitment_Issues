@@ -32,6 +32,7 @@ class ResponsesTests(unittest.TestCase):
         self.assertFalse(payload['store'])
         self.assertNotIn('max_tokens', payload)
         self.assertNotIn('tools', payload)
+        self.assertIn('one strict JSON action object', payload['input'][0]['content'])
 
     @patch('urllib.request.urlopen')
     def test_incomplete_response_preserves_billed_usage(self, http):

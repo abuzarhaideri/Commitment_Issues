@@ -9,11 +9,34 @@ import re
 from urllib.parse import urlencode
 import urllib.error
 import urllib.request
-from .models import OpenAICompatibleAdapter, ModelError, ModelHTTPError, ServiceUnavailableError, ProtocolError
+from .models import OpenAICompatibleAdapter, ModelError, ModelHTTPError, ServiceUnavailableError, ProtocolError, action_protocol_instruction
 from .rate_limits import RequestPacer, RateLimitError, retry_delay
 
 GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/openai'
 FREE_DEVELOPMENT_MODEL = 'gemini-3.1-flash-lite'
+
+
+def action_response_schema(tools):
+    """Tie each action name to its supplied argument schema, without flattening it.
+
+    Native generateContent supports responseJsonSchema with anyOf and enums:
+    https://ai.google.dev/api/generate-content#v1beta.GenerationConfig
+    The decoder continues to accept legacy single actions as well as arrays.
+    """
+    variants = []
+    for tool in tools or []:
+        function = tool.get('function', tool)
+        variants.append({'type': 'object', 'properties': {
+            'action': {'type': 'string', 'enum': [function['name']]},
+            'arguments': function['parameters'], 'goal': {'type': 'string'}},
+            'required': ['action', 'arguments'], 'additionalProperties': False})
+    if not variants:
+        # Standalone probes supply no tools and choose their own action name.
+        variants.append({'type': 'object', 'properties': {
+            'action': {'type': 'string'}, 'arguments': {'type': 'object'},
+            'goal': {'type': 'string'}}, 'required': ['action', 'arguments'],
+            'additionalProperties': False})
+    return {'anyOf': variants}
 
 
 def list_generation_models(api_key):
@@ -95,6 +118,21 @@ class GeminiAdapter(OpenAICompatibleAdapter):
             m for m in payload['messages'] if m['role'] != 'system']
         return payload
 
+    def prepare_action_payload(self, payload, tools):
+        if self.api_route == 'native':
+            payload['action_response_schema'] = action_response_schema(tools)
+            # Schemas are transmitted once in generationConfig. The decoder still
+            # accepts legacy batches, but new native requests ask for one action.
+            instruction = payload['messages'][0]['content'].split('Available tools: ', 1)[0]
+            payload['messages'][0] = {'role': 'system', 'content': instruction}
+        return self.prepare_payload(payload)
+
+    def estimate_request_tokens(self, messages, tools=None):
+        payload = {'model': self.model, 'max_tokens': self.max_output_tokens,
+                   'messages': [{'role': 'system', 'content': action_protocol_instruction(tools)}, *messages]}
+        payload = self.prepare_action_payload(payload, tools)
+        return self.count_or_estimate_tokens(self._request(payload).data.decode())
+
     def _event(self, kind, **data):
         if self.event_callback:
             self.event_callback(kind, **data)
@@ -112,30 +150,46 @@ class GeminiAdapter(OpenAICompatibleAdapter):
         body = {'contents': contents, 'systemInstruction': {'parts': [{'text': '\n\n'.join(system)}]},
                 'generationConfig': {'maxOutputTokens': self.max_output_tokens,
                                      'responseMimeType': 'application/json', 'thinkingConfig': thinking}}
+        if 'action_response_schema' in payload:
+            body['generationConfig']['responseJsonSchema'] = payload['action_response_schema']
         return urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/' + self.model + ':generateContent',
             data=json.dumps(body).encode(), headers={'x-goog-api-key': self.api_key, 'Content-Type': 'application/json'}, method='POST')
 
     def _normalize_response(self, body):
         if self.api_route == 'compatibility':
             return body
+        usage, valid = {}, False
         try:
             result = json.loads(body)
+            usage = result.get('usageMetadata', {})
+            valid = (isinstance(usage, dict) and all(type(usage.get(k)) is int and usage[k] >= 0
+                     for k in ('promptTokenCount', 'candidatesTokenCount')) and
+                     type(usage.get('thoughtsTokenCount', 0)) is int and usage.get('thoughtsTokenCount', 0) >= 0)
             candidate = result['candidates'][0]
             parts = candidate.get('content', {}).get('parts', [])
             text = ''.join(p['text'] for p in parts if not p.get('thought') and isinstance(p.get('text'), str))
             if not text or candidate.get('finishReason') != 'STOP':
-                raise ProtocolError('Native Gemini response has no complete action text')
+                finish = candidate.get('finishReason')
+                safe_finish = finish if finish in ('STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'OTHER', 'BLOCKLIST', 'PROHIBITED_CONTENT') else 'UNKNOWN'
+                error = ProtocolError('Native Gemini response has no complete action text; finish reason: ' + safe_finish)
+                error.finish_reason = safe_finish
+                if valid:
+                    error.input_tokens = usage['promptTokenCount']
+                    error.output_tokens = usage['candidatesTokenCount'] + usage.get('thoughtsTokenCount', 0)
+                    error.usage_estimated = False
+                raise error
             normalized = {'choices': [{'message': {'content': text}}]}
-            usage = result.get('usageMetadata', {})
-            keys = ('promptTokenCount', 'candidatesTokenCount')
-            if all(type(usage.get(k)) is int and usage[k] >= 0 for k in keys):
-                thoughts = usage.get('thoughtsTokenCount', 0)
-                if type(thoughts) is int and thoughts >= 0:
-                    normalized['usage'] = {'prompt_tokens': usage['promptTokenCount'],
-                                           'completion_tokens': usage['candidatesTokenCount'] + thoughts}
+            if valid:
+                normalized['usage'] = {'prompt_tokens': usage['promptTokenCount'],
+                                       'completion_tokens': usage['candidatesTokenCount'] + usage.get('thoughtsTokenCount', 0)}
             return json.dumps(normalized)
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
-            raise ProtocolError('Malformed native Gemini response') from None
+            error = ProtocolError('Malformed native Gemini response')
+            if valid:
+                error.input_tokens = usage['promptTokenCount']
+                error.output_tokens = usage['candidatesTokenCount'] + usage.get('thoughtsTokenCount', 0)
+                error.usage_estimated = False
+            raise error from None
 
     def _post(self, payload):
         deadline = getattr(self, 'deadline', time.monotonic() + self.timeout)
@@ -154,7 +208,14 @@ class GeminiAdapter(OpenAICompatibleAdapter):
                     raw = response.read(2 * 1024 * 1024 + 1)
                     if len(raw) > 2 * 1024 * 1024:
                         raise ModelError('Model response exceeded size limit')
-                    return self._normalize_response(raw.decode())
+                    try:
+                        return self._normalize_response(raw.decode())
+                    except ProtocolError as error:
+                        if not hasattr(error, 'input_tokens'):
+                            error.input_tokens = self.count_or_estimate_tokens(payload)
+                            error.output_tokens = self.count_or_estimate_tokens(raw.decode())
+                            error.usage_estimated = True
+                        raise
             except urllib.error.HTTPError as exc:
                 code = exc.code
                 if code not in (429, 500, 502, 503, 504):

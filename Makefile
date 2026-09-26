@@ -28,3 +28,7 @@ clean:
 .PHONY: benchmark-free
 benchmark-free:
 	.venv/bin/python benchmarks/run_free.py $(ARGS)
+
+.PHONY: reliability
+reliability:
+	.venv/bin/python tools/reliability_check.py
