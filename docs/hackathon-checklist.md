@@ -37,7 +37,7 @@ Updated September 27, 2026. This replaces the accumulated historical checklist. 
 - [ ] Confirm evaluator runtime, permitted commands and numeric limits/scoring.
 - [ ] Commit prescribed evaluation profile; validate both models and clean-clone launch on that runtime.
 - [x] Scan all local Git objects and all allowlisted release files for high-confidence credential formats; no matches found (277 Git blobs, 133 submission files). Review the scope and limitation in `THIRD_PARTY_NOTICES.md` and the release notes.
-- [ ] Select/publish required repository/release location; execute remote CI.
+- [x] Publish the repository's `main` branch at https://github.com/abuzarhaideri/Commitment_Issues; GitHub Actions passed all six OS/Python matrix jobs: https://github.com/abuzarhaideri/Commitment_Issues/actions/runs/36280304156. No tagged release was created because no release artifact/tag was specified.
 - [ ] Supply pitch/video if required by organisers.
 
 ## Unproven capabilities / future work
