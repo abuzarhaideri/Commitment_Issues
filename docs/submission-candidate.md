@@ -39,7 +39,7 @@ Final model validation is a separate gate: after organisers supply details, conf
 
 ## Release boundary
 
-The repository's `main` branch is published at https://github.com/abuzarhaideri/Commitment_Issues. Remote CI passed on all six Ubuntu/macOS × Python 3.11–3.13 combinations at https://github.com/abuzarhaideri/Commitment_Issues/actions/runs/36280304156. The allowlisted ZIP remains a local artifact; no formal tagged release was requested or created. An MIT license and attribution notes are present. A high-confidence credential-pattern review found no matches in 283 Git blobs (all local Git objects, including unreachable ones) or the 133 allowlisted files. This does not guarantee absence of every secret. Target commands execute on the host with basic guards, not OS isolation. Token budgets are estimates, not strict billing ceilings. See the checklist for additional unproven capabilities.
+The repository's `main` branch is published at https://github.com/abuzarhaideri/Commitment_Issues. Remote CI passed on all six Ubuntu/macOS × Python 3.11–3.13 combinations at https://github.com/abuzarhaideri/Commitment_Issues/actions/runs/36280421015. The allowlisted ZIP remains a local artifact; no formal tagged release was requested or created. An MIT license and attribution notes are present. A high-confidence credential-pattern review found no matches across the local Git object database (including unreachable objects) or allowlisted files. This does not guarantee absence of every secret. Target commands execute on the host with basic guards, not OS isolation. Token budgets are estimates, not strict billing ceilings. See the checklist for additional unproven capabilities.
 
 ## Candidate verification
 
